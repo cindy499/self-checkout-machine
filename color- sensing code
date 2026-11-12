@@ -1,0 +1,110 @@
+#include <DFPongController.h>
+#include "Adafruit_APDS9999.h"
+
+DFPongController controller;
+Adafruit_APDS9999 apds;
+
+int controllerNumber = 10;
+
+uint16_t nearValue = 200;
+float redBelow    = 0.30;   // g/r below this = RED -> UP
+float yellowAbove = 0.50;   // g/r above this = YELLOW -> DOWN
+int   yellowNeed  = 6;      // yellow must repeat this many times in a row
+int   proxTol     = 6;      // prox change below this = card has stopped moving
+int   proxStable  = 8;      // readings of stable prox before DOWN is allowed
+
+int lastProx = 0;
+int proxStableCount = 0;
+int yellowSeen = 0;
+
+unsigned long lastPrint = 0;
+
+void setup()
+{
+  Serial.begin(115200);
+  delay(1500);
+
+  pinMode(7, OUTPUT);
+  digitalWrite(7, HIGH);
+  delay(100);
+
+  if (!apds.begin())
+  {
+    Serial.println("No APDS-9999 found");
+    while (1) delay(10);
+  }
+
+  apds.enableProximitySensor(true);
+  apds.enableLightSensor(true);
+  apds.setRGBMode(true);
+
+  controller.setControllerNumber(controllerNumber);
+  controller.setStatusLED(LED_BUILTIN);
+  controller.begin();
+}
+
+int readCardColour()
+{
+  uint16_t prox = 0;
+  uint32_t r = 0, g = 0, b = 0, ir = 0;
+
+  apds.readProximity(&prox);
+  apds.getRGBIRData(&r, &g, &b, &ir);
+
+  float ratio = 0;
+  if (r > 0) ratio = (float)g / (float)r;
+
+  int result = NEUTRAL;
+
+  if (prox >= nearValue && r > 0)
+  {
+    int dp = (int)prox - lastProx;
+    if (dp < 0) dp = -dp;
+    if (dp <= proxTol) proxStableCount++;
+    else proxStableCount = 0;
+
+    if (ratio < redBelow)
+    {
+      result = UP;
+      yellowSeen = 0;
+    }
+    else if (ratio > yellowAbove && proxStableCount >= proxStable)
+    {
+      yellowSeen++;
+      if (yellowSeen >= yellowNeed) result = DOWN;
+    }
+    else
+    {
+      yellowSeen = 0;
+    }
+  }
+  else
+  {
+    proxStableCount = 0;
+    yellowSeen = 0;
+  }
+  lastProx = prox;
+
+  if (millis() - lastPrint > 200)
+  {
+    lastPrint = millis();
+    Serial.print("prox: ");
+    Serial.print(prox);
+    Serial.print("  g/r: ");
+    Serial.print(ratio, 2);
+    Serial.print("  pStable: ");
+    Serial.print(proxStableCount);
+    if (result == UP) Serial.println("  -> UP");
+    else if (result == DOWN) Serial.println("  -> DOWN");
+    else Serial.println("  -> stop");
+  }
+
+  return result;
+}
+
+void loop()
+{
+  controller.update();
+  controller.sendControl(readCardColour());
+  delay(20);
+}
